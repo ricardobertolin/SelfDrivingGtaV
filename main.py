@@ -1,171 +1,178 @@
-import numpy as np
-from PIL import ImageGrab
-import cv2
+"""
+Self-Driving GTA V  —  entry point.
+
+Run with GTA V in windowed mode at 800x600 anywhere on your screen.
+The window position is detected automatically. Press Q to stop cleanly.
+"""
+
+import ctypes
 import time
-from numpy import ones,vstack
-from numpy.linalg import lstsq
-from directkeys import PressKey, W, A, S, D
-from statistics import mean
+from typing import Optional, Tuple
 
-def roi(img, vertices):
-    
-    mask = np.zeros_like(img)   
-      
-    cv2.fillPoly(mask, vertices, 255)
+import cv2
+import numpy as np
 
-    masked = cv2.bitwise_and(img, mask)
-    return masked
+from config import (
+    CENTER_LINE_COLOR, HUD_COLOR, KEY_A, KEY_D, KEY_S, KEY_W,
+    KILL_VK, LANE_COLOR, MIN_LINES_FOR_STEERING, ROI_BOTTOM_Y, ROI_TOP_Y,
+    SHOW_HUD, SMOOTHING_WINDOW,
+)
+from controller import KeyController
+from lane_detection import DetectionResult, LaneDetector
+from screen_capture import find_gta_window, grab_screen
+from steering import SteeringController
 
-
-def draw_lanes(img, lines, color=[0, 255, 255], thickness=3):
-
-    try:
-
-        ys = []  
-        for i in lines:
-            for ii in i:
-                ys += [ii[1],ii[3]]
-        min_y = min(ys)
-        max_y = 600
-        new_lines = []
-        line_dict = {}
-
-        for idx,i in enumerate(lines):
-            for xyxy in i:
-                x_coords = (xyxy[0],xyxy[2])
-                y_coords = (xyxy[1],xyxy[3])
-                A = vstack([x_coords,ones(len(x_coords))]).T
-                m, b = lstsq(A, y_coords)[0]
-
-                x1 = (min_y-b) / m
-                x2 = (max_y-b) / m
-
-                line_dict[idx] = [m,b,[int(x1), min_y, int(x2), max_y]]
-                new_lines.append([int(x1), min_y, int(x2), max_y])
-
-        final_lanes = {}
-
-        for idx in line_dict:
-            final_lanes_copy = final_lanes.copy()
-            m = line_dict[idx][0]
-            b = line_dict[idx][1]
-            line = line_dict[idx][2]
-            
-            if len(final_lanes) == 0:
-                final_lanes[m] = [ [m,b,line] ]
-                
-            else:
-                found_copy = False
-
-                for other_ms in final_lanes_copy:
-
-                    if not found_copy:
-                        if abs(other_ms*1.2) > abs(m) > abs(other_ms*0.8):
-                            if abs(final_lanes_copy[other_ms][0][1]*1.2) > abs(b) > abs(final_lanes_copy[other_ms][0][1]*0.8):
-                                final_lanes[other_ms].append([m,b,line])
-                                found_copy = True
-                                break
-                        else:
-                            final_lanes[m] = [ [m,b,line] ]
-
-        line_counter = {}
-
-        for lanes in final_lanes:
-            line_counter[lanes] = len(final_lanes[lanes])
-
-        top_lanes = sorted(line_counter.items(), key=lambda item: item[1])[::-1][:2]
-
-        lane1_id = top_lanes[0][0]
-        lane2_id = top_lanes[1][0]
-
-        def average_lane(lane_data):
-            x1s = []
-            y1s = []
-            x2s = []
-            y2s = []
-            for data in lane_data:
-                x1s.append(data[2][0])
-                y1s.append(data[2][1])
-                x2s.append(data[2][2])
-                y2s.append(data[2][3])
-            return int(mean(x1s)), int(mean(y1s)), int(mean(x2s)), int(mean(y2s)) 
-
-        l1_x1, l1_y1, l1_x2, l1_y2 = average_lane(final_lanes[lane1_id])
-        l2_x1, l2_y1, l2_x2, l2_y2 = average_lane(final_lanes[lane2_id])
-
-        return [l1_x1, l1_y1, l1_x2, l1_y2], [l2_x1, l2_y1, l2_x2, l2_y2]
-    except Exception as e:
-        print(str(e))
+Lane = Tuple[int, int, int, int]
 
 
-def process_img(image):
-    original_image = image
-    # convert to gray
-    processed_img = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    # edge detection
-    processed_img =  cv2.Canny(processed_img, threshold1 = 200, threshold2=300)
-    
-    processed_img = cv2.GaussianBlur(processed_img,(5,5),0)
-    
-    vertices = np.array([[10,500],[10,300],[300,200],[500,200],[800,300],[800,500],
-                         ], np.int32)
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-    processed_img = roi(processed_img, [vertices])
-    #                                     rho   theta   thresh  min length, max gap:        
-    lines = cv2.HoughLinesP(processed_img, 1, np.pi/180, 180,      20,       15)
-    try:
-        l1, l2 = draw_lanes(original_image,lines)
-        cv2.line(original_image, (l1[0], l1[1]), (l1[2], l1[3]), [0,255,0], 30)
-        cv2.line(original_image, (l2[0], l2[1]), (l2[2], l2[3]), [0,255,0], 30)
-    except Exception as e:
-        print(str(e))
-        pass
-    try:
-        for coords in lines:
-            coords = coords[0]
-            try:
-                cv2.line(processed_img, (coords[0], coords[1]), (coords[2], coords[3]), [255,0,0], 3)
-                
-                
-            except Exception as e:
-                print(str(e))
-    except Exception as e:
-        pass
+def is_vk_down(vk: int) -> bool:
+    """True if the given Windows Virtual Key is currently held."""
+    return bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
 
-    return processed_img,original_image
 
-def main():
+def draw_lanes_on_frame(
+    frame: np.ndarray,
+    left:  Optional[Lane],
+    right: Optional[Lane],
+) -> None:
+    if left:
+        cv2.line(frame, (left[0],  left[1]),  (left[2],  left[3]),  LANE_COLOR, 5)
+    if right:
+        cv2.line(frame, (right[0], right[1]), (right[2], right[3]), LANE_COLOR, 5)
+    if left and right:
+        cx_top = (left[0] + right[0]) // 2
+        cx_bot = (left[2] + right[2]) // 2
+        cv2.line(frame, (cx_top, ROI_TOP_Y), (cx_bot, ROI_BOTTOM_Y),
+                 CENTER_LINE_COLOR, 3)
+
+
+def draw_hud(
+    frame:    np.ndarray,
+    offset:   float,
+    action:   str,
+    throttle: str,
+    fps:      float,
+    fill:     int,
+) -> None:
+    lines = [
+        f"FPS:    {fps:5.1f}",
+        f"Offset: {offset:+.0f} px",
+        f"Steer:  {action.upper()}",
+        f"Speed:  {throttle.upper()}",
+        f"Buffer: {fill}/{SMOOTHING_WINDOW}",
+    ]
+    # Semi-transparent dark background strip
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (0, 0), (210, 146), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.5, frame, 0.5, 0, frame)
+
+    y = 25
+    for text in lines:
+        cv2.putText(frame, text, (8, y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, HUD_COLOR, 2, cv2.LINE_AA)
+        y += 26
+
+
+# ---------------------------------------------------------------------------
+# Main loop
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    detector = LaneDetector()
+    steering = SteeringController()
+    keys     = KeyController()
+
+    fps      = 0.0
+    offset   = 0.0
+    action   = 'straight'
+    throttle = 'accelerate'
+
+    print("Self-Driving GTA V")
+
+    # Locate GTA V now so a clear error is shown before the countdown.
+    bbox = find_gta_window()
+    print(f"GTA V window found — capture region: {bbox}")
+
+    print("Switching to game in 3 seconds … alt-tab into GTA V now.")
+    time.sleep(3)
+    print("Running. Press Q to stop.")
+
     last_time = time.time()
-    while True:
-        screen =  np.array(ImageGrab.grab(bbox=(0,40,800,640)))
-        print('Frame took {} seconds'.format(time.time()-last_time))
-        last_time = time.time()
-        new_screen,original_image = process_img(screen)
-        cv2.imshow('window', new_screen)
-        cv2.imshow('window2',cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB))
-        if cv2.waitKey(25) & 0xFF == ord('q'):
-            cv2.destroyAllWindows()
-            break
 
-"""def straight():
-    PressKey(W)
-    ReleaseKey(A)
-    ReleaseKey(D)
+    try:
+        while True:
+            # --- Kill switch (global Q key) ---
+            if is_vk_down(KILL_VK):
+                print("Kill switch activated.")
+                break
 
-def left():
-    PressKey(A)
-    ReleaseKey(W)
-    ReleaseKey(D)
-    ReleaseKey(A)
+            # --- Capture & detect ---
+            frame  = grab_screen()
+            result: DetectionResult = detector.detect(frame)
 
-def right():
-    PressKey(D)
-    ReleaseKey(A)
-    ReleaseKey(W)
-    ReleaseKey(D)
+            # --- Decide steering and speed ---
+            if (result.line_count >= MIN_LINES_FOR_STEERING
+                    and result.left_lane is not None
+                    and result.right_lane is not None):
+                offset   = steering.calculate_offset(result.left_lane, result.right_lane)
+                action   = steering.decide_action(offset)
+                throttle = steering.decide_speed(offset)
+            else:
+                # Not enough confidence — coast with no lateral input
+                action   = 'straight'
+                throttle = 'coast'
 
-def slow_ya_roll():
-    ReleaseKey(W)
-    ReleaseKey(A)
-    ReleaseKey(D)
-    """
+            # --- Lateral keys ---
+            if action == 'left':
+                keys.press(KEY_A)
+                keys.release(KEY_D)
+            elif action == 'right':
+                keys.press(KEY_D)
+                keys.release(KEY_A)
+            else:
+                keys.release(KEY_A)
+                keys.release(KEY_D)
+
+            # --- Throttle / brake keys ---
+            if throttle == 'accelerate':
+                keys.press(KEY_W)
+                keys.release(KEY_S)
+            elif throttle == 'brake':
+                keys.press(KEY_S)
+                keys.release(KEY_W)
+            else:  # coast
+                keys.release(KEY_W)
+                keys.release(KEY_S)
+
+            # --- FPS ---
+            now      = time.time()
+            fps      = 1.0 / max(now - last_time, 1e-9)
+            last_time = now
+
+            # --- Visualise ---
+            display = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            draw_lanes_on_frame(display, result.left_lane, result.right_lane)
+            if SHOW_HUD:
+                draw_hud(display, offset, action, throttle, fps, result.buffer_fill)
+
+            cv2.imshow('Self-Driving GTA V', display)
+
+            # Q inside the OpenCV window also quits
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+    except Exception as exc:
+        print(f"Unhandled exception: {exc}")
+        raise
+    finally:
+        keys.release_all()
+        cv2.destroyAllWindows()
+        print("All keys released. Exited cleanly.")
+
+
+if __name__ == '__main__':
+    main()
