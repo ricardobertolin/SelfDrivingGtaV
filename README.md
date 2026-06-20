@@ -1,8 +1,9 @@
+
+https://github.com/user-attachments/assets/60bd818a-e086-4823-ac8b-4766ee370719
+
 # Self-Driving GTA V
 
 PIBITI university research project — autonomous driving in GTA V using screen capture, computer vision, and a trained neural network.
-
-<video src="self_driving_1.mp4" controls width="100%"></video>
 
 ---
 
