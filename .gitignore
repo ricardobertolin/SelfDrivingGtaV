@@ -23,3 +23,8 @@ env/
 # OS
 Thumbs.db
 .DS_Store
+
+# Training data and model checkpoints
+training_data/
+*.pth
+*.npz
