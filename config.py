@@ -154,7 +154,9 @@ OVERLAY_WINDOW_X = 820   # where the OpenCV debug window is placed (just right o
 OVERLAY_WINDOW_Y = 0
 
 # --- Display / HUD ---
-SHOW_HUD           = True
+SHOW_HUD              = True
+SHOW_CAMERA_OVERLAY   = False   # ROI box, contour, crosshair, direction arrows
+SHOW_OBSTACLE_ZONE    = False   # danger-zone rectangle / warning text (detection still runs)
 HUD_COLOR          = (0, 255, 255)   # cyan  — normal HUD text
 LANE_COLOR         = (0, 255, 0)     # green — freshly detected lane
 LANE_STALE_COLOR   = (0, 140, 255)   # orange — lane from smoothing buffer / extrapolated

@@ -32,7 +32,7 @@ from config import (
     OBSTACLE_ZONE_COLOR_BLOCKED, OBSTACLE_ZONE_COLOR_CLEAR,
     OVERLAY_WINDOW_X, OVERLAY_WINDOW_Y,
     HONK_VK, RECORD_VK, REVERSE_ENABLED,
-    SHOW_HUD, SMOOTHING_WINDOW,
+    SHOW_CAMERA_OVERLAY, SHOW_HUD, SHOW_OBSTACLE_ZONE, SMOOTHING_WINDOW,
     STEER_HOLD_FRAMES, STEER_SKIP_FRAMES,
 )
 from data_collector import DataCollector
@@ -425,7 +425,7 @@ def main() -> None:
 
             # ---- Visualise ----
             display = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            if OBSTACLE_DETECTION_ENABLED:
+            if OBSTACLE_DETECTION_ENABLED and SHOW_OBSTACLE_ZONE:
                 draw_danger_zone(display, obstacle_ahead)
             draw_lanes_on_frame(
                 display,
@@ -434,7 +434,8 @@ def main() -> None:
             )
             if result.heading_deg is not None:
                 draw_heading_arrow(display, result.heading_deg)
-            cam_ctrl.draw(display, centroid, contour, cam_x_err, cam_y_err)
+            if SHOW_CAMERA_OVERLAY:
+                cam_ctrl.draw(display, centroid, contour, cam_x_err, cam_y_err)
             if SHOW_HUD:
                 draw_hud(display, offset, action, throttle,
                          ai_enabled, camera_lock, obstacle_ahead,
